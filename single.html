@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en-us">
+<head>
+  <meta charset="utf-8">
+  <base href="https://cdn.jsdelivr.net/gh/AlexBoops/REPO@main/">
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+  <link rel="preload" as="script" fetchpriority="high" href="https://cdn.jsdelivr.net/gh/AlexBoops/REPO@main/Build/1234.loader.js" crossorigin>
+  <link rel="icon" href="https://ssl.gstatic.com/docs/documents/images/kix-favicon7.ico">
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <title>Google Docs</title>
+
+  <style>
+    :root { color-scheme: dark; }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+    }
+
+    #unity-container {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      background: #000;
+    }
+
+    #unity-canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: #000;
+      outline: none;
+      touch-action: none;
+    }
+
+    #unity-loading-bar {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #000;
+      z-index: 5;
+      transition: opacity 0.25s ease;
+      gap: 12px;
+    }
+
+    #loading-title {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: 2px;
+      color: #fff;
+    }
+
+    #unity-progress-bar-empty {
+      width: 260px;
+      max-width: 70vw;
+      height: 6px;
+      background: #292929;
+      overflow: hidden;
+      border-radius: 999px;
+    }
+
+    #unity-progress-bar-full {
+      width: 0%;
+      height: 100%;
+      background: #fff;
+      transition: width 0.15s linear;
+    }
+
+    #loading-status {
+      font-size: 12px;
+      font-family: monospace;
+      color: #a1a1aa;
+    }
+
+    #unity-warning {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 20;
+      display: none;
+      font-size: 13px;
+    }
+
+    #unity-warning div {
+      padding: 10px 14px;
+      background: #d92b2b;
+      color: #fff;
+    }
+
+    #hud-bar {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 999999;
+      display: flex;
+      gap: 8px;
+      opacity: 0.45;
+      transition: opacity 0.2s ease;
+    }
+
+    #hud-bar:hover {
+      opacity: 1;
+    }
+
+    .hud-btn {
+      padding: 6px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      border-radius: 6px;
+      background: rgba(15, 15, 18, 0.85);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+
+    .hud-btn:hover {
+      background: rgba(45, 45, 55, 0.95);
+      border-color: #fff;
+    }
+
+    #rotate-hint {
+      position: fixed;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 40;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(15, 15, 18, 0.86);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      font-size: 12px;
+      color: #d7d7de;
+      display: none;
+      pointer-events: none;
+    }
+
+    @media (orientation: portrait) and (max-width: 900px) {
+      #rotate-hint { display: block; }
+    }
+  </style>
+</head>
+
+<body>
+  <div id="hud-bar">
+    <button class="hud-btn" id="btn-ab" onclick="openCloaked()">about:blank</button>
+    <button class="hud-btn" id="btn-fs" onclick="toggleFullscreen()">Fullscreen</button>
+  </div>
+
+  <div id="unity-container">
+    <canvas id="unity-canvas" width="960" height="600" tabindex="-1"></canvas>
+
+    <div id="unity-loading-bar">
+      <div id="loading-title">R.E.P.O.</div>
+      <div id="unity-progress-bar-empty">
+        <div id="unity-progress-bar-full"></div>
+      </div>
+      <div id="loading-status">Initializing...</div>
+    </div>
+
+    <div id="unity-warning"></div>
+  </div>
+
+  <div id="rotate-hint">Rotate your device to landscape for the best experience.</div>
+
+  <script>
+    (function () {
+      "use strict";
+
+      var CDN_BASE = "https://cdn.jsdelivr.net/gh/AlexBoops/REPO@main/";
+      var MANIFEST_NAME = "split-manifest.json";
+      var READ_AHEAD = 76 * 1024 * 1024; // buffer up to 4x 19 MB chunks ahead
+
+      var INLINE_MANIFEST = {
+        version: 1,
+        chunkSize: 19922944,
+        threshold: 20971520,
+        files: {
+          "Build/1234.data.unityweb": {
+            base: "Build/1234.data.unityweb",
+            size: 744375214,
+            chunks: 38,
+            digits: 0
+          }
+        }
+      };
+
+      // 1. Web Audio Auto-Unlock
+      var audioCtxs = [];
+      var OrigAudioContext = window.AudioContext || window.webkitAudioContext;
+      if (OrigAudioContext) {
+        var PatchedAudioContext = function (opts) {
+          var ctx = new OrigAudioContext(opts);
+          audioCtxs.push(ctx);
+          return ctx;
+        };
+        PatchedAudioContext.prototype = OrigAudioContext.prototype;
+        window.AudioContext = PatchedAudioContext;
+        if (window.webkitAudioContext) window.webkitAudioContext = PatchedAudioContext;
+
+        var resumeAll = function () {
+          audioCtxs.forEach(function (c) {
+            if (c && c.state === "suspended") c.resume().catch(function () {});
+          });
+        };
+        window.addEventListener("pointerdown", resumeAll, { passive: true });
+        window.addEventListener("keydown", resumeAll, { passive: true });
+      }
+
+      // 2. Pointer Lock Guard
+      var origLock = Element.prototype.requestPointerLock || function () {};
+      Element.prototype.requestPointerLock = function () {
+        try {
+          var res = origLock.apply(this, arguments);
+          if (res && typeof res.catch === "function") res.catch(function () {});
+          return res;
+        } catch (e) {}
+      };
+
+      // 3. Streaming Split-Chunk Browser Shim
+      if (window.__unitySplitShimInstalled) return;
+      window.__unitySplitShimInstalled = true;
+
+      var nativeFetch = window.fetch.bind(window);
+      var manifestPromise = Promise.resolve(INLINE_MANIFEST);
+
+      function pad(index, width) {
+        var text = String(index);
+        while (text.length < width) text = "0" + text;
+        return text;
+      }
+
+      function chunkUrl(entry, index) {
+        return new URL(entry.base + ".part" + pad(index, entry.digits || 0), CDN_BASE).href;
+      }
+
+      function findEntry(data, url) {
+        if (!data || !data.files || url == null) return null;
+        var pathname;
+        try {
+          pathname = decodeURIComponent(new URL(String(url), CDN_BASE).pathname);
+        } catch (error) {
+          return null;
+        }
+        var bases = Object.keys(data.files);
+        for (var i = 0; i < bases.length; i++) {
+          var tail = "/" + bases[i];
+          if (pathname === tail || pathname.slice(-tail.length) === tail) return data.files[bases[i]];
+        }
+        return null;
+      }
+
+      function fetchChunk(entry, index, init) {
+        var options = { cache: "force-cache", priority: "high" };
+        if (init && init.signal) options.signal = init.signal;
+        var url = chunkUrl(entry, index);
+        return nativeFetch(url, options).then(function (response) {
+          if (!response.ok) {
+            throw new Error("Chunk fetch failed (" + response.status + "): " + url);
+          }
+          return response.arrayBuffer();
+        });
+      }
+
+      function isWasm(binary) {
+        var head = new Uint8Array(binary, 0, Math.min(4, binary.byteLength));
+        return head.length === 4 && head[0] === 0x00 && head[1] === 0x61 && head[2] === 0x73 && head[3] === 0x6d;
+      }
+
+      function createBody(entry, init, firstChunk) {
+        var nextToEnqueue = 0;
+        var nextToFetch = 0;
+        var pending = Object.create(null);
+        var cancelled = false;
+        var CONCURRENT_CHUNKS = 6;
+        var strategy = window.ByteLengthQueuingStrategy
+          ? new ByteLengthQueuingStrategy({ highWaterMark: READ_AHEAD })
+          : { highWaterMark: 4 };
+
+        function fillQueue() {
+          while (!cancelled && nextToFetch < entry.chunks && nextToFetch < nextToEnqueue + CONCURRENT_CHUNKS) {
+            (function (index) {
+              pending[index] = index === 0
+                ? Promise.resolve(firstChunk)
+                : fetchChunk(entry, index, init);
+            })(nextToFetch);
+            nextToFetch++;
+          }
+        }
+
+        fillQueue();
+        return new ReadableStream({
+          pull: function (controller) {
+            if (cancelled) return;
+            if (nextToEnqueue >= entry.chunks) {
+              controller.close();
+              return;
+            }
+            var index = nextToEnqueue;
+            return pending[index].then(function (binary) {
+              if (cancelled) return;
+              delete pending[index];
+              controller.enqueue(new Uint8Array(binary));
+              nextToEnqueue++;
+              fillQueue();
+              if (nextToEnqueue >= entry.chunks) controller.close();
+            });
+          },
+          cancel: function () {
+            cancelled = true;
+            pending = Object.create(null);
+          }
+        }, strategy);
+      }
+
+      function splitResponse(entry, init) {
+        return fetchChunk(entry, 0, init).then(function (firstChunk) {
+          if (!firstChunk) throw new Error("No parts for " + entry.base);
+          var headers = {
+            "Content-Type": isWasm(firstChunk) ? "application/wasm" : "application/octet-stream",
+            "Content-Length": String(entry.size)
+          };
+          return new Response(createBody(entry, init, firstChunk), {
+            status: 200,
+            statusText: "OK",
+            headers: headers
+          });
+        });
+      }
+
+      window.fetch = function (input, init) {
+        var method = String((init && init.method) || (input && input.method) || "GET").toUpperCase();
+        var url = typeof input === "string"
+          ? input
+          : input && typeof input.url === "string"
+            ? input.url
+            : String(input);
+
+        if (typeof input === "string" && !/^(https?:|blob:|data:)/i.test(input)) {
+          input = new URL(input.replace(/^\.?\//, ""), CDN_BASE).href;
+        }
+
+        if (method !== "GET" && method !== "HEAD") return nativeFetch(input, init);
+
+        return manifestPromise.then(function (data) {
+          var entry = findEntry(data, url);
+          if (!entry) return nativeFetch(input, init);
+          if (method === "HEAD") {
+            return new Response(null, { status: 200, headers: { "Content-Length": String(entry.size) } });
+          }
+          return splitResponse(entry, init);
+        });
+      };
+
+      var XHR = window.XMLHttpRequest;
+      if (XHR && XHR.prototype) {
+        var nativeOpen = XHR.prototype.open;
+        var nativeSend = XHR.prototype.send;
+
+        XHR.prototype.open = function (method, url) {
+          this.__splitMethod = String(method || "GET").toUpperCase();
+          if (typeof url === "string" && !/^(https?:|blob:|data:)/i.test(url)) {
+            url = new URL(url.replace(/^\.?\//, ""), CDN_BASE).href;
+            arguments[1] = url;
+          }
+          this.__splitUrl = url;
+          return nativeOpen.apply(this, arguments);
+        };
+
+        XHR.prototype.send = function () {
+          var xhr = this;
+          var args = arguments;
+          if ((xhr.__splitMethod !== "GET" && xhr.__splitMethod !== "HEAD") || !xhr.__splitUrl) {
+            return nativeSend.apply(xhr, args);
+          }
+
+          manifestPromise.then(function (data) {
+            var entry = findEntry(data, xhr.__splitUrl);
+            if (!entry) {
+              nativeSend.apply(xhr, args);
+              return;
+            }
+            assembleViaXhr(xhr, entry, xhr.__splitUrl);
+          });
+        };
+      }
+
+      function assembleViaXhr(xhr, entry, url) {
+        var buffer = new Uint8Array(entry.size);
+        var received = 0;
+        var completed = 0;
+
+        function set(name, value) {
+          try {
+            Object.defineProperty(xhr, name, { configurable: true, value: value });
+          } catch (e) {
+            try { xhr[name] = value; } catch (ignored) {}
+          }
+        }
+
+        function fire(name, props) {
+          var event;
+          try {
+            event = new ProgressEvent(name, props || {});
+          } catch (e) {
+            try { event = new Event(name); } catch (ignored) { return; }
+          }
+          try { xhr.dispatchEvent(event); } catch (ignored) {}
+        }
+
+        var requests = [];
+        for (var i = 0; i < entry.chunks; i++) {
+          (function (index) {
+            requests.push(fetchChunk(entry, index, null).then(function (binary) {
+              completed += binary.byteLength;
+              set("readyState", 3);
+              fire("readystatechange", { loaded: completed, total: entry.size, lengthComputable: true });
+              fire("progress", { loaded: completed, total: entry.size, lengthComputable: true });
+              return binary;
+            }));
+          })(i);
+        }
+
+        Promise.all(requests).then(function (parts) {
+          for (var partIndex = 0; partIndex < parts.length; partIndex++) {
+            var part = new Uint8Array(parts[partIndex]);
+            buffer.set(part, received);
+            received += part.byteLength;
+          }
+          var type = String(xhr.responseType || "");
+          var body = buffer.subarray(0, received);
+          var response = type === "arraybuffer"
+            ? body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength)
+            : type === "blob"
+              ? new Blob([body])
+              : body;
+
+          set("status", 200);
+          set("statusText", "OK");
+          set("responseURL", url);
+          set("response", response);
+          set("readyState", 4);
+          fire("readystatechange", { loaded: received, total: entry.size, lengthComputable: true });
+          fire("progress", { loaded: received, total: entry.size, lengthComputable: true });
+          fire("load", { loaded: received, total: entry.size, lengthComputable: true });
+          fire("loadend", { loaded: received, total: entry.size, lengthComputable: true });
+        }).catch(function (error) {
+          set("status", 0);
+          set("readyState", 4);
+          fire("readystatechange", {});
+          fire("error", {});
+          fire("loadend", {});
+        });
+      }
+    })();
+  </script>
+
+  <script>
+    var CDN_ROOT = "https://cdn.jsdelivr.net/gh/AlexBoops/REPO@main";
+    var container = document.querySelector("#unity-container");
+    var canvas = document.querySelector("#unity-canvas");
+    var loadingBar = document.querySelector("#unity-loading-bar");
+    var progressBarFull = document.querySelector("#unity-progress-bar-full");
+    var loadingStatus = document.querySelector("#loading-status");
+    var warningBanner = document.querySelector("#unity-warning");
+    var unityInstance = null;
+
+    function openCloaked() {
+      var btn = document.getElementById("btn-ab");
+      var win = window.open("about:blank", "_blank");
+      if (!win || win.closed) {
+        btn.textContent = "Allow Popups!";
+        setTimeout(function () { btn.textContent = "about:blank"; }, 3000);
+        return;
+      }
+      var clone = document.documentElement.cloneNode(true);
+      var ab = clone.querySelector("#btn-ab");
+      if (ab) ab.remove();
+      win.document.open();
+      win.document.write("<!DOCTYPE html>\n" + clone.outerHTML);
+      win.document.close();
+    }
+
+    function toggleFullscreen() {
+      if (unityInstance) {
+        unityInstance.SetFullscreen(1);
+        return;
+      }
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(function () {});
+        return;
+      }
+      var request = container.requestFullscreen || container.webkitRequestFullscreen;
+      if (request) {
+        var result = request.call(container);
+        if (result && result.catch) result.catch(function () {});
+        if (screen.orientation && screen.orientation.lock) {
+          screen.orientation.lock("landscape").catch(function () {});
+        }
+      }
+    }
+
+    function unityShowBanner(msg, type) {
+      var div = document.createElement("div");
+      div.textContent = msg;
+      if (type === "error") {
+        div.style.background = "#d92b2b";
+        div.style.color = "#fff";
+        div.style.padding = "10px";
+      }
+      warningBanner.appendChild(div);
+      warningBanner.style.display = "block";
+      if (type !== "error") {
+        setTimeout(function () {
+          if (div.parentNode) warningBanner.removeChild(div);
+          warningBanner.style.display = warningBanner.children.length ? "block" : "none";
+        }, 6000);
+      }
+    }
+
+    var lowEnd = false;
+    try {
+      var memory = navigator.deviceMemory || 8;
+      var cores = navigator.hardwareConcurrency || 8;
+      lowEnd = memory <= 4 || cores <= 4 || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
+    } catch (error) {
+      lowEnd = false;
+    }
+
+    var buildUrl = CDN_ROOT + "/Build";
+    var loaderUrl = buildUrl + "/1234.loader.js";
+
+    var config = {
+      arguments: [],
+      dataUrl: buildUrl + "/1234.data.unityweb",
+      frameworkUrl: buildUrl + "/1234.framework.js.unityweb",
+      codeUrl: buildUrl + "/1234.wasm.unityweb",
+      streamingAssetsUrl: CDN_ROOT + "/StreamingAssets",
+      companyName: "REPO Web",
+      productName: "R.E.P.O. WebGL",
+      productVersion: "1.0",
+      showBanner: unityShowBanner,
+      devicePixelRatio: lowEnd ? 0.7 : Math.min(window.devicePixelRatio || 1, 1),
+      autoSyncPersistentDataPath: true,
+      errorHandler: function (error, url, line) {
+        console.error("Unity WebGL error: " + error + " (" + url + ":" + line + ")");
+        return false;
+      }
+    };
+
+    function hideLoadingBar() {
+      if (!loadingBar) return;
+      loadingBar.style.opacity = "0";
+      setTimeout(function () {
+        if (loadingBar && loadingBar.parentNode) {
+          loadingBar.parentNode.removeChild(loadingBar);
+        }
+      }, 300);
+    }
+
+    var script = document.createElement("script");
+    script.src = loaderUrl;
+    script.fetchPriority = "high";
+
+    script.onload = function () {
+      if (typeof createUnityInstance !== "function") {
+        unityShowBanner("Unity loader did not initialize correctly.", "error");
+        return;
+      }
+
+      createUnityInstance(canvas, config, function (progress) {
+        var pct = Math.round(progress * 100);
+        progressBarFull.style.width = pct + "%";
+        loadingStatus.textContent = "Loading R.E.P.O. (" + pct + "%)...";
+      }).then(function (instance) {
+        unityInstance = instance;
+        hideLoadingBar();
+        try { canvas.focus(); } catch (error) {}
+      }).catch(function (message) {
+        console.error("Unity loading error:", message);
+        unityShowBanner("Failed to load the game: " + message, "error");
+      });
+    };
+
+    script.onerror = function () {
+      unityShowBanner("Could not load Build/1234.loader.js from jsDelivr.", "error");
+    };
+
+    document.body.appendChild(script);
+
+    function flushSaves() {
+      if (!unityInstance) return;
+      try {
+        unityInstance.SendMessage("WebGLPersistence", "Flush");
+      } catch (error) {}
+    }
+
+    window.addEventListener("pagehide", flushSaves);
+    window.addEventListener("beforeunload", flushSaves);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") flushSaves();
+    });
+
+    canvas.addEventListener("click", function () {
+      try { canvas.focus(); } catch (error) {}
+    });
+  </script>
+</body>
+</html>
