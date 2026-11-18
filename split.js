@@ -1,27 +1,26 @@
 /*
  * split.js
  *
- * Big Unity WebGL build files (*.unityweb) are stored cut into 3 MB parts so no
- * single file has to be uploaded/downloaded whole. This file does two jobs:
+ * Big Unity WebGL build files (*.unityweb) are stored cut into 19 MB parts so no
+ * single file exceeds GitHub/jsDelivr limits. This file does two jobs:
  *
- *  1. Node CLI - cuts the big files into parts and writes split-manifest.json
+ *  1. Node CLI - cuts files > 20 MB into 19 MB parts and writes split-manifest.json
  *
- *        node split.js            split every file bigger than 15 MB into 3 MB parts
+ *        node split.js            split files > 20 MB & index existing .part* sets
  *        node split.js restore    put the original files back and remove the parts
  *
  *  2. Browser shim - included by index.html before the Unity loader. It patches
  *     fetch (and XMLHttpRequest) so a request for Build/1234.data.unityweb is
  *     answered with a single streaming Response that is the parts concatenated
- *     in order. Unity never knows the difference: same URL, same bytes, same
- *     Content-Length, progress reporting still works.
+ *     in order.
  */
 (function () {
   "use strict";
 
-  var CHUNK_SIZE = 3 * 1024 * 1024; // 3 MB
-  var THRESHOLD = 15 * 1024 * 1024; // files bigger than 15 MB get split
+  var CHUNK_SIZE = 19 * 1024 * 1024; // 19 MB
+  var THRESHOLD = 20 * 1024 * 1024;  // files bigger than 20 MB get split
   var MANIFEST_NAME = "split-manifest.json";
-  var READ_AHEAD = 8 * 1024 * 1024; // bytes the browser shim keeps buffered
+  var READ_AHEAD = 38 * 1024 * 1024; // keep up to 2 chunks buffered ahead
 
   /* ------------------------------------------------------------------ */
   /* Node side: split / restore                                          */
@@ -75,11 +74,17 @@
       }
     }
 
+    function indexMap(chunks) {
+      var list = {};
+      for (var i = 0; i < chunks; i++) list[i] = true;
+      return list;
+    }
+
     function splitOne(rel, families) {
       var file = abs(rel);
       var size = fs.statSync(file).size;
       var chunks = Math.ceil(size / CHUNK_SIZE);
-      var digits = Math.max(2, String(chunks - 1).length);
+      var digits = 0; // unpadded: .part0, .part1, ...
 
       process.stdout.write("  " + rel + " (" + megabytes(size) + ") -> " + chunks + " parts ... ");
 
@@ -100,7 +105,6 @@
         fs.closeSync(handle);
       }
 
-      // Prove the parts really rebuild the original before deleting it.
       var expected = original.digest("hex");
       var rebuilt = crypto.createHash("sha256");
       for (var j = 0; j < chunks; j++) {
@@ -113,12 +117,6 @@
       fs.unlinkSync(file);
       families[rel] = { parts: indexMap(chunks), size: size, sha256: expected, digits: digits };
       console.log("ok");
-    }
-
-    function indexMap(chunks) {
-      var list = {};
-      for (var i = 0; i < chunks; i++) list[i] = true;
-      return list;
     }
 
     function splitAll() {
@@ -134,34 +132,46 @@
       var files = walk(root, []);
       var families = {};
       var big = [];
-      var already = 0;
 
       for (var i = 0; i < files.length; i++) {
         var rel = files[i];
         var match = /^(.*)\.part(\d+)$/.exec(rel);
         if (match) {
           var base = match[1];
-          var index = Number(match[2]);
-          var family = families[base] || (families[base] = { parts: {}, size: 0, sha256: null, digits: 0 });
+          var rawDigits = match[2];
+          var index = Number(rawDigits);
+          var family = families[base] || (families[base] = {
+            parts: {},
+            size: 0,
+            sha256: null,
+            padded: false,
+            digits: 0
+          });
           family.parts[index] = true;
           family.size += fs.statSync(abs(rel)).size;
-          family.digits = Math.max(family.digits, match[2].length);
+          // Detect leading-zero padding (e.g. "00" or "01") vs unpadded ("0", "1", "10")
+          if (rawDigits.length > 1 && rawDigits.charAt(0) === "0") {
+            family.padded = true;
+            family.digits = Math.max(family.digits, rawDigits.length);
+          } else if (family.padded) {
+            family.digits = Math.max(family.digits, rawDigits.length);
+          }
           continue;
         }
         if (fs.statSync(abs(rel)).size > THRESHOLD) big.push(rel);
       }
 
-      already = Object.keys(families).length;
+      var already = Object.keys(families).length;
 
       if (!big.length) {
-        console.log("No file is bigger than " + megabytes(THRESHOLD) + ".");
+        console.log("No unsplit file is bigger than " + megabytes(THRESHOLD) + ".");
       } else {
         console.log("Splitting " + big.length + " file(s) into " + megabytes(CHUNK_SIZE) + " parts:");
         for (var k = 0; k < big.length; k++) splitOne(big[k], families);
       }
 
       if (already) {
-        console.log("Found " + already + " file(s) that are already split; keeping them in the manifest.");
+        console.log("Indexed " + already + " pre-split file(s) into the manifest.");
       }
 
       var manifest = {
@@ -187,7 +197,7 @@
           base: name,
           size: entry.size,
           chunks: indexes.length,
-          digits: entry.digits || String(indexes[indexes.length - 1]).length,
+          digits: entry.padded ? entry.digits : 0,
           sha256: entry.sha256 || (known && known.size === entry.size ? known.sha256 : null)
         };
       }
@@ -199,7 +209,6 @@
 
       fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
       console.log("Wrote " + MANIFEST_NAME + ": " + bases.length + " file(s), " + parts + " part(s).");
-      console.log("index.html loads split.js, which reassembles them for the game.");
     }
 
     function restoreAll() {
@@ -219,7 +228,7 @@
         var out = fs.openSync(file, "w");
         try {
           for (var p = 0; p < entry.chunks; p++) {
-            var part = fs.readFileSync(file + ".part" + pad(p, entry.digits));
+            var part = fs.readFileSync(file + ".part" + pad(p, entry.digits || 0));
             hash.update(part);
             fs.writeSync(out, part);
           }
@@ -230,7 +239,7 @@
           fs.unlinkSync(file);
           throw new Error("restored " + base + " does not match its recorded hash");
         }
-        for (var q = 0; q < entry.chunks; q++) fs.unlinkSync(file + ".part" + pad(q, entry.digits));
+        for (var q = 0; q < entry.chunks; q++) fs.unlinkSync(file + ".part" + pad(q, entry.digits || 0));
         console.log("  restored " + base + " (" + megabytes(entry.size) + ")");
       }
 
@@ -259,7 +268,12 @@
     var nativeFetch = typeof W.fetch === "function" ? W.fetch.bind(W) : null;
     if (!nativeFetch) return;
 
-    var manifestPromise = nativeFetch(MANIFEST_NAME, { cache: "no-store" })
+    function pageBase() {
+      return (W.document && W.document.baseURI) || W.location.href;
+    }
+
+    var manifestUrl = new W.URL(MANIFEST_NAME, pageBase()).href;
+    var manifestPromise = nativeFetch(manifestUrl, { cache: "no-store" })
       .then(function (response) {
         if (!response.ok) {
           console.warn("split.js: " + MANIFEST_NAME + " returned HTTP " + response.status + "; serving files as-is.");
@@ -272,10 +286,6 @@
         return null;
       });
 
-    function pageBase() {
-      return (W.document && W.document.baseURI) || W.location.href;
-    }
-
     function pad(index, width) {
       var text = String(index);
       while (text.length < width) text = "0" + text;
@@ -283,12 +293,11 @@
     }
 
     function chunkUrl(entry, index) {
-      return new W.URL(entry.base + ".part" + pad(index, entry.digits), pageBase()).href;
+      return new W.URL(entry.base + ".part" + pad(index, entry.digits || 0), pageBase()).href;
     }
 
-    // A request for .../Build/1234.data.unityweb matches the "Build/1234.data.unityweb" entry.
     function findEntry(data, url) {
-      if (!data || !data.files || url === null) return null;
+      if (!data || !data.files || url == null) return null;
       var pathname;
       try {
         pathname = decodeURIComponent(new W.URL(String(url), pageBase()).pathname);
@@ -326,7 +335,7 @@
       var ahead = entry.chunks > 1 ? fetchChunk(entry, 1, init) : null;
       var strategy = W.ByteLengthQueuingStrategy
         ? new W.ByteLengthQueuingStrategy({ highWaterMark: READ_AHEAD })
-        : { highWaterMark: 4 };
+        : { highWaterMark: 2 };
 
       return new W.ReadableStream(
         {
@@ -387,7 +396,6 @@
       });
     };
 
-    // Fallback for anything that still loads the build through XHR.
     var XHR = W.XMLHttpRequest;
     if (XHR && XHR.prototype) {
       var nativeOpen = XHR.prototype.open;
@@ -412,6 +420,10 @@
             nativeSend.apply(xhr, args);
             return;
           }
+          if (xhr.__splitMethod === "HEAD") {
+            finishHeadXhr(W, xhr, entry, xhr.__splitUrl);
+            return;
+          }
           assembleViaXhr(W, xhr, entry, fetchChunk, xhr.__splitUrl);
         });
       };
@@ -423,35 +435,51 @@
     };
   }
 
+  function setXhrProp(xhr, name, value) {
+    try {
+      Object.defineProperty(xhr, name, { configurable: true, value: value });
+    } catch (error) {
+      try {
+        xhr[name] = value;
+      } catch (ignored) {}
+    }
+  }
+
+  function fireXhrEvent(W, xhr, name, props) {
+    var event;
+    try {
+      event = new W.ProgressEvent(name, props || {});
+    } catch (error) {
+      try {
+        event = new W.Event(name);
+      } catch (ignored) {
+        return;
+      }
+    }
+    try {
+      xhr.dispatchEvent(event);
+    } catch (ignored) {}
+  }
+
+  function finishHeadXhr(W, xhr, entry, url) {
+    xhr.getResponseHeader = function (header) {
+      return String(header || "").toLowerCase() === "content-length" ? String(entry.size) : null;
+    };
+    xhr.getAllResponseHeaders = function () {
+      return "content-length: " + entry.size + "\r\n";
+    };
+    setXhrProp(xhr, "status", 200);
+    setXhrProp(xhr, "statusText", "OK");
+    setXhrProp(xhr, "responseURL", url);
+    setXhrProp(xhr, "readyState", 4);
+    fireXhrEvent(W, xhr, "readystatechange", {});
+    fireXhrEvent(W, xhr, "load", {});
+    fireXhrEvent(W, xhr, "loadend", {});
+  }
+
   function assembleViaXhr(W, xhr, entry, fetchChunk, url) {
     var buffer = new Uint8Array(entry.size);
     var received = 0;
-
-    function set(name, value) {
-      try {
-        Object.defineProperty(xhr, name, { configurable: true, value: value });
-      } catch (error) {
-        try {
-          xhr[name] = value;
-        } catch (ignored) {}
-      }
-    }
-
-    function fire(name, props) {
-      var event;
-      try {
-        event = new W.ProgressEvent(name, props || {});
-      } catch (error) {
-        try {
-          event = new W.Event(name);
-        } catch (ignored) {
-          return;
-        }
-      }
-      try {
-        xhr.dispatchEvent(event);
-      } catch (ignored) {}
-    }
 
     var chain = Promise.resolve();
     for (var i = 0; i < entry.chunks; i++) {
@@ -463,9 +491,9 @@
           .then(function (binary) {
             buffer.set(new Uint8Array(binary), received);
             received += binary.byteLength;
-            set("readyState", 3);
-            fire("readystatechange", { loaded: received, total: entry.size, lengthComputable: true });
-            fire("progress", { loaded: received, total: entry.size, lengthComputable: true });
+            setXhrProp(xhr, "readyState", 3);
+            fireXhrEvent(W, xhr, "readystatechange", { loaded: received, total: entry.size, lengthComputable: true });
+            fireXhrEvent(W, xhr, "progress", { loaded: received, total: entry.size, lengthComputable: true });
           });
       })(i);
     }
@@ -485,26 +513,26 @@
       } else {
         response = body;
       }
-      set("status", 200);
-      set("statusText", "OK");
-      set("responseURL", url);
-      set("response", response);
-      if (type === "" || type === "text") set("responseText", response);
-      set("readyState", 4);
-      fire("readystatechange", { loaded: received, total: entry.size, lengthComputable: true });
-      fire("progress", { loaded: received, total: entry.size, lengthComputable: true });
-      fire("load", { loaded: received, total: entry.size, lengthComputable: true });
-      fire("loadend", { loaded: received, total: entry.size, lengthComputable: true });
+      setXhrProp(xhr, "status", 200);
+      setXhrProp(xhr, "statusText", "OK");
+      setXhrProp(xhr, "responseURL", url);
+      setXhrProp(xhr, "response", response);
+      if (type === "" || type === "text") setXhrProp(xhr, "responseText", response);
+      setXhrProp(xhr, "readyState", 4);
+      fireXhrEvent(W, xhr, "readystatechange", { loaded: received, total: entry.size, lengthComputable: true });
+      fireXhrEvent(W, xhr, "progress", { loaded: received, total: entry.size, lengthComputable: true });
+      fireXhrEvent(W, xhr, "load", { loaded: received, total: entry.size, lengthComputable: true });
+      fireXhrEvent(W, xhr, "loadend", { loaded: received, total: entry.size, lengthComputable: true });
     }).catch(function (error) {
-      set("status", 0);
-      set("readyState", 4);
-      fire("readystatechange", {});
+      setXhrProp(xhr, "status", 0);
+      setXhrProp(xhr, "readyState", 4);
+      fireXhrEvent(W, xhr, "readystatechange", {});
       try {
         xhr.dispatchEvent(new W.ErrorEvent("error", { message: String(error) }));
       } catch (ignored) {
-        fire("error", {});
+        fireXhrEvent(W, xhr, "error", {});
       }
-      fire("loadend", {});
+      fireXhrEvent(W, xhr, "loadend", {});
     });
 
     function decode(bytes) {
